@@ -2,10 +2,9 @@
 menuTitle: Hash rings
 title: Consistent hash rings
 description: Describes how the Loki architecture uses consistent hash rings.
-weight: 700
+weight: 800
 aliases:
-    - /docs/loki/latest/fundamentals/architecture/rings
-    - /docs/loki/latest/get-started/hash-rings/
+    - ../fundamentals/architecture/rings
 ---
 # Consistent hash rings
 
@@ -36,10 +35,11 @@ These components need to be connected into a hash ring:
 These components can optionally be connected into a hash ring:
 - index gateway
 
+
 In an architecture that has three distributors and three ingesters defined,
 the hash rings for these components connect the instances of same-type components.
 
-![distributor and ingester rings](./ring-overview.png)
+![Distributor and ingester rings](../ring-overview.png "Distributor and ingester rings")
 
 Each node in the ring represents an instance of a component.
 Each node has a key-value store that holds communication information
@@ -54,7 +54,7 @@ For each node, the key-value store holds:
 
 ## Configuring rings
 
-Define [ring configuration]({{< relref "../configuration#common" >}}) within the `common.ring_config` block.
+Define [ring configuration](https://grafana.com/docs/loki/<LOKI_VERSION>/configure/#common) within the `common.ring_config` block.
 
 Use the default `memberlist` key-value store type unless there is
 a compelling reason to use a different key-value store type.

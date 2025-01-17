@@ -1,11 +1,10 @@
 ---
 title: Query examples
 menuTitle: Query examples  
-description: LogQL query examples with explanations on what those queries accomplish.
+description: Provides LogQL query examples with explanations on what those queries accomplish.
 aliases: 
-- /docs/loki/latest/logql
-- /docs/loki/latest/query
-weight: 50 
+- ../logql/query_examples/
+weight: 800 
 ---
 
 # Query examples
@@ -51,7 +50,7 @@ These LogQL query examples have explanations of what the queries accomplish.
         != "grafana_com"
         |= "session opened"
         != "sudo: "
-        |regexp "(^(?P<user>\\S+ {1,2}){11})"
+        | regexp "(^(?P<user>\\S+ {1,2}){11})"
         | line_format "USER = {{.user}}"
     ```
 

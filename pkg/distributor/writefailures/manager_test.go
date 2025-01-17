@@ -8,10 +8,11 @@ import (
 	"time"
 
 	"github.com/go-kit/log"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 
-	"github.com/grafana/loki/pkg/runtime"
-	"github.com/grafana/loki/pkg/util/flagext"
+	"github.com/grafana/loki/v3/pkg/runtime"
+	"github.com/grafana/loki/v3/pkg/util/flagext"
 )
 
 func TestWriteFailuresLogging(t *testing.T) {
@@ -19,24 +20,26 @@ func TestWriteFailuresLogging(t *testing.T) {
 		buf := bytes.NewBuffer(nil)
 		logger := log.NewLogfmtLogger(buf)
 
-		f := func(tenantID string) *runtime.Config {
-			if tenantID == "good-tenant" {
-				return &runtime.Config{
-					LimitedLogPushErrors: true,
+		f := &providerMock{
+			tenantConfig: func(tenantID string) *runtime.Config {
+				if tenantID == "good-tenant" {
+					return &runtime.Config{
+						LimitedLogPushErrors: true,
+					}
 				}
-			}
-			if tenantID == "bad-tenant" {
-				return &runtime.Config{
-					LimitedLogPushErrors: false,
+				if tenantID == "bad-tenant" {
+					return &runtime.Config{
+						LimitedLogPushErrors: false,
+					}
 				}
-			}
-			return &runtime.Config{}
+				return &runtime.Config{}
+			},
 		}
 
 		runtimeCfg, err := runtime.NewTenantConfigs(f)
 		require.NoError(t, err)
 
-		manager := NewManager(logger, Cfg{LogRate: flagext.ByteSize(1000)}, runtimeCfg)
+		manager := NewManager(logger, prometheus.NewRegistry(), Cfg{LogRate: flagext.ByteSize(1000)}, runtimeCfg, "ingester")
 
 		manager.Log("bad-tenant", fmt.Errorf("bad-tenant contains invalid entry"))
 		manager.Log("good-tenant", fmt.Errorf("good-tenant contains invalid entry"))
@@ -54,16 +57,18 @@ func TestWriteFailuresRateLimiting(t *testing.T) {
 	buf := bytes.NewBuffer(nil)
 	logger := log.NewLogfmtLogger(buf)
 
-	f := func(tenantID string) *runtime.Config {
-		return &runtime.Config{
-			LimitedLogPushErrors: true,
-		}
+	provider := &providerMock{
+		tenantConfig: func(_ string) *runtime.Config {
+			return &runtime.Config{
+				LimitedLogPushErrors: true,
+			}
+		},
 	}
-	runtimeCfg, err := runtime.NewTenantConfigs(f)
+	runtimeCfg, err := runtime.NewTenantConfigs(provider)
 	require.NoError(t, err)
 
 	t.Run("with zero rate limiting", func(t *testing.T) {
-		manager := NewManager(logger, Cfg{LogRate: flagext.ByteSize(0)}, runtimeCfg)
+		manager := NewManager(logger, prometheus.NewRegistry(), Cfg{LogRate: flagext.ByteSize(0)}, runtimeCfg, "distributor")
 
 		manager.Log("known-tenant", fmt.Errorf("known-tenant entry error"))
 
@@ -72,28 +77,28 @@ func TestWriteFailuresRateLimiting(t *testing.T) {
 	})
 
 	t.Run("bytes exceeded on single message", func(t *testing.T) {
-		manager := NewManager(logger, Cfg{LogRate: flagext.ByteSize(1000)}, runtimeCfg)
+		manager := NewManager(logger, prometheus.NewRegistry(), Cfg{LogRate: flagext.ByteSize(1000)}, runtimeCfg, "distributor")
 
 		errorStr := strings.Builder{}
 		for i := 0; i < 1001; i++ {
 			errorStr.WriteRune('z')
 		}
 
-		manager.Log("known-tenant", fmt.Errorf(errorStr.String()))
+		manager.Log("known-tenant", fmt.Errorf("%s", errorStr.String()))
 
 		content := buf.String()
 		require.Empty(t, content)
 	})
 
 	t.Run("valid bytes", func(t *testing.T) {
-		manager := NewManager(logger, Cfg{LogRate: flagext.ByteSize(1002)}, runtimeCfg)
+		manager := NewManager(logger, prometheus.NewRegistry(), Cfg{LogRate: flagext.ByteSize(1002)}, runtimeCfg, "ingester")
 
 		errorStr := strings.Builder{}
 		for i := 0; i < 1001; i++ {
 			errorStr.WriteRune('z')
 		}
 
-		manager.Log("known-tenant", fmt.Errorf(errorStr.String()))
+		manager.Log("known-tenant", fmt.Errorf("%s", errorStr.String()))
 
 		content := buf.String()
 		require.NotEmpty(t, content)
@@ -101,7 +106,7 @@ func TestWriteFailuresRateLimiting(t *testing.T) {
 	})
 
 	t.Run("limit is reset after a second", func(t *testing.T) {
-		manager := NewManager(logger, Cfg{LogRate: flagext.ByteSize(1000)}, runtimeCfg)
+		manager := NewManager(logger, prometheus.NewRegistry(), Cfg{LogRate: flagext.ByteSize(1000)}, runtimeCfg, "ingester")
 
 		errorStr1 := strings.Builder{}
 		errorStr2 := strings.Builder{}
@@ -112,10 +117,10 @@ func TestWriteFailuresRateLimiting(t *testing.T) {
 			errorStr2.WriteRune('y')
 		}
 
-		manager.Log("known-tenant", fmt.Errorf(errorStr1.String()))
-		manager.Log("known-tenant", fmt.Errorf(errorStr2.String())) // more than 1KB/s
+		manager.Log("known-tenant", fmt.Errorf("%s", errorStr1.String()))
+		manager.Log("known-tenant", fmt.Errorf("%s", errorStr2.String())) // more than 1KB/s
 		time.Sleep(time.Second)
-		manager.Log("known-tenant", fmt.Errorf(errorStr3.String()))
+		manager.Log("known-tenant", fmt.Errorf("%s", errorStr3.String()))
 
 		content := buf.String()
 		require.NotEmpty(t, content)
@@ -125,9 +130,9 @@ func TestWriteFailuresRateLimiting(t *testing.T) {
 	})
 
 	t.Run("limit is per-tenant", func(t *testing.T) {
-		runtimeCfg, err := runtime.NewTenantConfigs(f)
+		runtimeCfg, err := runtime.NewTenantConfigs(provider)
 		require.NoError(t, err)
-		manager := NewManager(logger, Cfg{LogRate: flagext.ByteSize(1000)}, runtimeCfg)
+		manager := NewManager(logger, prometheus.NewRegistry(), Cfg{LogRate: flagext.ByteSize(1000)}, runtimeCfg, "ingester")
 
 		errorStr1 := strings.Builder{}
 		errorStr2 := strings.Builder{}
@@ -159,4 +164,12 @@ func TestWriteFailuresRateLimiting(t *testing.T) {
 		require.Contains(t, content, "1y")
 		require.Contains(t, content, "3z")
 	})
+}
+
+type providerMock struct {
+	tenantConfig func(string) *runtime.Config
+}
+
+func (m *providerMock) TenantConfig(userID string) *runtime.Config {
+	return m.tenantConfig(userID)
 }

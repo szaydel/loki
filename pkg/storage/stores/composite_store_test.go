@@ -8,16 +8,17 @@ import (
 
 	"github.com/pkg/errors"
 
-	"github.com/grafana/loki/pkg/logproto"
+	"github.com/grafana/loki/v3/pkg/logproto"
 
+	"github.com/grafana/dskit/test"
 	"github.com/prometheus/common/model"
 	"github.com/prometheus/prometheus/model/labels"
 	"github.com/stretchr/testify/require"
-	"github.com/weaveworks/common/test"
 
-	"github.com/grafana/loki/pkg/storage/chunk"
-	"github.com/grafana/loki/pkg/storage/chunk/fetcher"
-	"github.com/grafana/loki/pkg/storage/stores/index/stats"
+	"github.com/grafana/loki/v3/pkg/storage/chunk"
+	"github.com/grafana/loki/v3/pkg/storage/chunk/fetcher"
+	"github.com/grafana/loki/v3/pkg/storage/stores/index/stats"
+	"github.com/grafana/loki/v3/pkg/storage/stores/shipper/indexshipper/tsdb/sharding"
 )
 
 type mockStore int
@@ -36,7 +37,7 @@ func (m mockStore) LabelValuesForMetricName(_ context.Context, _ string, _, _ mo
 
 func (m mockStore) SetChunkFilterer(_ chunk.RequestChunkFilterer) {}
 
-func (m mockStore) GetChunkRefs(_ context.Context, _ string, _, _ model.Time, _ ...*labels.Matcher) ([][]chunk.Chunk, []*fetcher.Fetcher, error) {
+func (m mockStore) GetChunks(_ context.Context, _ string, _, _ model.Time, _ chunk.Predicate, _ *logproto.ChunkRefGroup) ([][]chunk.Chunk, []*fetcher.Fetcher, error) {
 	return nil, nil, nil
 }
 
@@ -44,7 +45,7 @@ func (m mockStore) GetSeries(_ context.Context, _ string, _, _ model.Time, _ ...
 	return nil, nil
 }
 
-func (m mockStore) LabelNamesForMetricName(_ context.Context, _ string, _, _ model.Time, _ string) ([]string, error) {
+func (m mockStore) LabelNamesForMetricName(_ context.Context, _ string, _, _ model.Time, _ string, _ ...*labels.Matcher) ([]string, error) {
 	return nil, nil
 }
 
@@ -56,8 +57,16 @@ func (m mockStore) Stats(_ context.Context, _ string, _, _ model.Time, _ ...*lab
 	return nil, nil
 }
 
-func (m mockStore) SeriesVolume(_ context.Context, _ string, _, _ model.Time, _ int32, _ ...*labels.Matcher) (*logproto.VolumeResponse, error) {
+func (m mockStore) Volume(_ context.Context, _ string, _, _ model.Time, _ int32, _ []string, _ string, _ ...*labels.Matcher) (*logproto.VolumeResponse, error) {
 	return nil, nil
+}
+
+func (m mockStore) GetShards(_ context.Context, _ string, _, _ model.Time, _ uint64, _ chunk.Predicate) (*logproto.ShardsResponse, error) {
+	return nil, nil
+}
+
+func (m mockStore) HasForSeries(_, _ model.Time) (sharding.ForSeries, bool) {
+	return nil, false
 }
 
 func (m mockStore) Stop() {}
@@ -73,7 +82,7 @@ func TestCompositeStore(t *testing.T) {
 			return nil
 		}
 	}
-	cs := compositeStore{
+	cs := CompositeStore{
 		stores: []compositeStoreEntry{
 			{model.TimeFromUnix(0), mockStore(1)},
 			{model.TimeFromUnix(100), mockStore(2)},
@@ -82,16 +91,18 @@ func TestCompositeStore(t *testing.T) {
 	}
 
 	for i, tc := range []struct {
-		cs            compositeStore
+		cs            CompositeStore
 		from, through int64
 		want          []result
 	}{
 		// Test we have sensible results when there are no schema's defined
-		{compositeStore{}, 0, 1, []result{}},
+		{
+			CompositeStore{}, 0, 1, []result{},
+		},
 
 		// Test we have sensible results when there is a single schema
 		{
-			compositeStore{
+			CompositeStore{
 				stores: []compositeStoreEntry{
 					{model.TimeFromUnix(0), mockStore(1)},
 				},
@@ -104,7 +115,7 @@ func TestCompositeStore(t *testing.T) {
 
 		// Test we have sensible results for negative (ie pre 1970) times
 		{
-			compositeStore{
+			CompositeStore{
 				stores: []compositeStoreEntry{
 					{model.TimeFromUnix(0), mockStore(1)},
 				},
@@ -113,7 +124,7 @@ func TestCompositeStore(t *testing.T) {
 			[]result{},
 		},
 		{
-			compositeStore{
+			CompositeStore{
 				stores: []compositeStoreEntry{
 					{model.TimeFromUnix(0), mockStore(1)},
 				},
@@ -126,7 +137,7 @@ func TestCompositeStore(t *testing.T) {
 
 		// Test we have sensible results when there is two schemas
 		{
-			compositeStore{
+			CompositeStore{
 				stores: []compositeStoreEntry{
 					{model.TimeFromUnix(0), mockStore(1)},
 					{model.TimeFromUnix(100), mockStore(2)},
@@ -199,14 +210,14 @@ func (m mockStoreLabel) LabelValuesForMetricName(_ context.Context, _ string, _,
 	return m.values, nil
 }
 
-func (m mockStoreLabel) LabelNamesForMetricName(_ context.Context, _ string, _, _ model.Time, _ string) ([]string, error) {
+func (m mockStoreLabel) LabelNamesForMetricName(_ context.Context, _ string, _, _ model.Time, _ string, _ ...*labels.Matcher) ([]string, error) {
 	return m.values, nil
 }
 
 func TestCompositeStoreLabels(t *testing.T) {
 	t.Parallel()
 
-	cs := compositeStore{
+	cs := CompositeStore{
 		stores: []compositeStoreEntry{
 			{model.TimeFromUnix(0), mockStore(1)},
 			{model.TimeFromUnix(20), mockStoreLabel{mockStore(1), []string{"b", "c", "e"}}},
@@ -256,7 +267,7 @@ func (m mockStoreGetChunkFetcher) GetChunkFetcher(_ model.Time) *fetcher.Fetcher
 }
 
 func TestCompositeStore_GetChunkFetcher(t *testing.T) {
-	cs := compositeStore{
+	cs := CompositeStore{
 		stores: []compositeStoreEntry{
 			{model.TimeFromUnix(10), mockStoreGetChunkFetcher{mockStore(0), &fetcher.Fetcher{}}},
 			{model.TimeFromUnix(20), mockStoreGetChunkFetcher{mockStore(1), &fetcher.Fetcher{}}},
@@ -299,47 +310,137 @@ func TestCompositeStore_GetChunkFetcher(t *testing.T) {
 	}
 }
 
-type mockStoreSeriesVolume struct {
+type mockStoreVolume struct {
 	mockStore
 	value *logproto.VolumeResponse
 	err   error
 }
 
-func (m mockStoreSeriesVolume) SeriesVolume(_ context.Context, _ string, _, _ model.Time, _ int32, _ ...*labels.Matcher) (*logproto.VolumeResponse, error) {
+func (m mockStoreVolume) Volume(_ context.Context, _ string, _, _ model.Time, _ int32, _ []string, _ string, _ ...*labels.Matcher) (*logproto.VolumeResponse, error) {
 	return m.value, m.err
 }
 
-func TestSeriesVolume(t *testing.T) {
+func TestVolume(t *testing.T) {
 	t.Run("it returns volumes from all stores", func(t *testing.T) {
-		cs := compositeStore{
+		cs := CompositeStore{
 			stores: []compositeStoreEntry{
-				{model.TimeFromUnix(10), mockStoreSeriesVolume{mockStore: mockStore(0), value: &logproto.VolumeResponse{
+				{model.TimeFromUnix(10), mockStoreVolume{mockStore: mockStore(0), value: &logproto.VolumeResponse{
 					Volumes: []logproto.Volume{{Name: `{foo="bar"}`, Volume: 15}}, Limit: 10,
 				}}},
-				{model.TimeFromUnix(20), mockStoreSeriesVolume{mockStore: mockStore(1), value: &logproto.VolumeResponse{
+				{model.TimeFromUnix(20), mockStoreVolume{mockStore: mockStore(1), value: &logproto.VolumeResponse{
 					Volumes: []logproto.Volume{{Name: `{foo="bar"}`, Volume: 30}}, Limit: 10,
 				}}},
 			},
 		}
 
-		volumes, err := cs.SeriesVolume(context.Background(), "fake", 10001, 20001, 10, nil)
+		volumes, err := cs.Volume(context.Background(), "fake", 10001, 20001, 10, nil, "")
 		require.NoError(t, err)
 		require.Equal(t, []logproto.Volume{{Name: `{foo="bar"}`, Volume: 45}}, volumes.Volumes)
 	})
 
 	t.Run("it returns an error if any store returns an error", func(t *testing.T) {
-		cs := compositeStore{
+		cs := CompositeStore{
 			stores: []compositeStoreEntry{
-				{model.TimeFromUnix(10), mockStoreSeriesVolume{mockStore: mockStore(0), value: &logproto.VolumeResponse{
+				{model.TimeFromUnix(10), mockStoreVolume{mockStore: mockStore(0), value: &logproto.VolumeResponse{
 					Volumes: []logproto.Volume{{Name: `{foo="bar"}`, Volume: 15}}, Limit: 10,
 				}}},
-				{model.TimeFromUnix(20), mockStoreSeriesVolume{mockStore: mockStore(1), err: errors.New("something bad")}},
+				{model.TimeFromUnix(20), mockStoreVolume{mockStore: mockStore(1), err: errors.New("something bad")}},
 			},
 		}
 
-		volumes, err := cs.SeriesVolume(context.Background(), "fake", 10001, 20001, 10, nil)
+		volumes, err := cs.Volume(context.Background(), "fake", 10001, 20001, 10, nil, "")
 		require.Error(t, err, "something bad")
 		require.Nil(t, volumes)
 	})
+}
 
+func TestFilterForTimeRange(t *testing.T) {
+	mkRefs := func(from, through model.Time) (res []*logproto.ChunkRef) {
+		for i := from; i <= through; i++ {
+			res = append(res, &logproto.ChunkRef{
+				From:    i,
+				Through: i + 1,
+			})
+		}
+		return res
+	}
+
+	mkChks := func(from, through model.Time) (res []chunk.Chunk) {
+		for _, ref := range mkRefs(from, through) {
+			res = append(res, chunk.Chunk{ChunkRef: *ref})
+		}
+		return res
+	}
+
+	for _, tc := range []struct {
+		desc          string
+		input         []*logproto.ChunkRef
+		from, through model.Time
+		exp           []chunk.Chunk
+	}{
+		{
+			desc:    "no refs",
+			input:   nil,
+			from:    0,
+			through: 10,
+			exp:     []chunk.Chunk{},
+		},
+		{
+			desc:    "no refs in range",
+			input:   mkRefs(0, 5),
+			from:    10,
+			through: 15,
+			exp:     []chunk.Chunk{},
+		},
+		{
+			desc:    "all refs in range",
+			input:   mkRefs(0, 5),
+			from:    0,
+			through: 5,
+			exp:     mkChks(0, 5),
+		},
+		{
+			desc:    "some refs in range",
+			input:   mkRefs(0, 5),
+			from:    2,
+			through: 3,
+			exp:     mkChks(2, 3),
+		},
+		{
+			desc:    "left overlap",
+			input:   mkRefs(0, 5),
+			from:    3,
+			through: 7,
+			exp:     mkChks(3, 5),
+		},
+		{
+			desc:    "right overlap",
+			input:   mkRefs(5, 10),
+			from:    3,
+			through: 7,
+			exp:     mkChks(5, 7),
+		},
+		{
+			desc: "ref with from == through",
+			input: []*logproto.ChunkRef{
+				{From: 1, Through: 1}, // outside
+				{From: 2, Through: 2}, // ref.From == from == ref.Through
+				{From: 3, Through: 3}, // inside
+				{From: 4, Through: 4}, // ref.From == through == ref.Through
+				{From: 5, Through: 5}, // outside
+			},
+			from:    2,
+			through: 4,
+			exp: []chunk.Chunk{
+				{ChunkRef: logproto.ChunkRef{From: 2, Through: 2}},
+				{ChunkRef: logproto.ChunkRef{From: 3, Through: 3}},
+				{ChunkRef: logproto.ChunkRef{From: 4, Through: 4}},
+			},
+		},
+	} {
+		t.Run(tc.desc, func(t *testing.T) {
+			got := filterForTimeRange(tc.input, tc.from, tc.through)
+			require.Equal(t, tc.exp, got)
+		})
+	}
 }

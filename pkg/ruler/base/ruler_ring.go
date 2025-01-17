@@ -3,7 +3,9 @@ package base
 import (
 	"flag"
 	"fmt"
+	"net"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/go-kit/log"
@@ -12,7 +14,7 @@ import (
 	"github.com/grafana/dskit/netutil"
 	"github.com/grafana/dskit/ring"
 
-	util_log "github.com/grafana/loki/pkg/util/log"
+	util_log "github.com/grafana/loki/v3/pkg/util/log"
 )
 
 const (
@@ -79,17 +81,20 @@ func (cfg *RingConfig) RegisterFlags(f *flag.FlagSet) {
 func (cfg *RingConfig) ToLifecyclerConfig(logger log.Logger) (ring.BasicLifecyclerConfig, error) {
 	instanceAddr, err := ring.GetInstanceAddr(cfg.InstanceAddr, cfg.InstanceInterfaceNames, logger, cfg.EnableIPv6)
 	if err != nil {
-		return ring.BasicLifecyclerConfig{}, err
+		return ring.BasicLifecyclerConfig{
+			RingTokenGenerator: ring.NewRandomTokenGenerator(),
+		}, err
 	}
 
 	instancePort := ring.GetInstancePort(cfg.InstancePort, cfg.ListenPort)
 
 	return ring.BasicLifecyclerConfig{
 		ID:                  cfg.InstanceID,
-		Addr:                fmt.Sprintf("%s:%d", instanceAddr, instancePort),
+		Addr:                net.JoinHostPort(instanceAddr, strconv.Itoa(instancePort)),
 		HeartbeatPeriod:     cfg.HeartbeatPeriod,
 		TokensObservePeriod: 0,
 		NumTokens:           cfg.NumTokens,
+		RingTokenGenerator:  ring.NewRandomTokenGenerator(),
 	}, nil
 }
 

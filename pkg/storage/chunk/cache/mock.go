@@ -4,21 +4,36 @@ import (
 	"context"
 	"sync"
 
-	"github.com/grafana/loki/pkg/logqlmodel/stats"
+	"github.com/grafana/loki/v3/pkg/logqlmodel/stats"
 )
 
 type MockCache interface {
 	Cache
 	NumKeyUpdates() int
+	GetInternal() map[string][]byte
+	KeysRequested() int
+	GetKeys() []string
+	SetErr(error, error)
 }
 
 type mockCache struct {
 	numKeyUpdates int
+	keysRequested int
 	sync.Mutex
-	cache map[string][]byte
+	cache    map[string][]byte
+	storeErr error // optional error that is returned when calling Store()
+	fetchErr error // optional error that is returned when calling Fetch()
+}
+
+func (m *mockCache) SetErr(storeErr, fetchErr error) {
+	m.storeErr, m.fetchErr = storeErr, fetchErr
 }
 
 func (m *mockCache) Store(_ context.Context, keys []string, bufs [][]byte) error {
+	if m.storeErr != nil {
+		return m.storeErr
+	}
+
 	m.Lock()
 	defer m.Unlock()
 	for i := range keys {
@@ -29,9 +44,14 @@ func (m *mockCache) Store(_ context.Context, keys []string, bufs [][]byte) error
 }
 
 func (m *mockCache) Fetch(_ context.Context, keys []string) (found []string, bufs [][]byte, missing []string, err error) {
+	if m.fetchErr != nil {
+		return nil, nil, nil, m.fetchErr
+	}
+
 	m.Lock()
 	defer m.Unlock()
 	for _, key := range keys {
+		m.keysRequested++
 		buf, ok := m.cache[key]
 		if ok {
 			found = append(found, key)
@@ -52,6 +72,25 @@ func (m *mockCache) GetCacheType() stats.CacheType {
 
 func (m *mockCache) NumKeyUpdates() int {
 	return m.numKeyUpdates
+}
+
+func (m *mockCache) GetInternal() map[string][]byte {
+	return m.cache
+}
+
+func (m *mockCache) GetKeys() []string {
+	m.Lock()
+	defer m.Unlock()
+
+	keys := make([]string, 0, len(m.cache))
+	for key := range m.cache {
+		keys = append(keys, key)
+	}
+	return keys
+}
+
+func (m *mockCache) KeysRequested() int {
+	return m.keysRequested
 }
 
 // NewMockCache makes a new MockCache.

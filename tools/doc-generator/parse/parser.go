@@ -15,17 +15,17 @@ import (
 	"unicode"
 
 	"github.com/grafana/dskit/flagext"
+	"github.com/grafana/dskit/log"
 	"github.com/grafana/regexp"
 	"github.com/pkg/errors"
 	"github.com/prometheus/common/model"
 	prometheus_config "github.com/prometheus/prometheus/config"
 	"github.com/prometheus/prometheus/model/relabel"
-	"github.com/weaveworks/common/logging"
 
-	"github.com/grafana/loki/pkg/ruler/util"
-	storage_config "github.com/grafana/loki/pkg/storage/config"
-	util_validation "github.com/grafana/loki/pkg/util/validation"
-	"github.com/grafana/loki/pkg/validation"
+	"github.com/grafana/loki/v3/pkg/ruler/util"
+	storage_config "github.com/grafana/loki/v3/pkg/storage/config"
+	util_validation "github.com/grafana/loki/v3/pkg/util/validation"
+	"github.com/grafana/loki/v3/pkg/validation"
 )
 
 var (
@@ -301,6 +301,7 @@ func config(block *ConfigBlock, cfg interface{}, flags map[uintptr]*flag.Flag, r
 				Required:     isFieldRequired(field),
 				FieldDesc:    getFieldDescription(cfg, field, ""),
 				FieldType:    fieldType,
+				FieldDefault: getFieldDefault(field, ""),
 				FieldExample: getFieldExample(fieldName, field.Type),
 				Element:      element,
 			})
@@ -461,6 +462,8 @@ func getCustomFieldType(t reflect.Type) (string, bool) {
 		return "remote_write_config...", true
 	case reflect.TypeOf(validation.OverwriteMarshalingStringMap{}).String():
 		return "headers", true
+	case reflect.TypeOf(relabel.Regexp{}).String():
+		return fieldString, true
 	default:
 		return "", false
 	}
@@ -492,7 +495,7 @@ func getFieldExample(fieldKey string, fieldType reflect.Type) *FieldExample {
 }
 
 func getCustomFieldEntry(cfg interface{}, field reflect.StructField, fieldValue reflect.Value, flags map[uintptr]*flag.Flag) (*ConfigEntry, error) {
-	if field.Type == reflect.TypeOf(logging.Level{}) || field.Type == reflect.TypeOf(logging.Format{}) {
+	if field.Type == reflect.TypeOf(log.Level{}) {
 		fieldFlag, err := getFieldFlag(field, fieldValue, flags)
 		if err != nil || fieldFlag == nil {
 			return nil, err

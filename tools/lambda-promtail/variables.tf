@@ -16,6 +16,18 @@ variable "bucket_names" {
   default     = []
 }
 
+variable "filter_prefix" {
+  type        = string
+  description = "Prefix for S3 bucket notification filter"
+  default     = "AWSLogs/"
+}
+
+variable "filter_suffix" {
+  type        = string
+  description = "Suffix for S3 bucket notification filter"
+  default     = ".gz"
+}
+
 variable "log_group_names" {
   type        = set(string)
   description = "List of CloudWatch Log Group names to create Subscription Filters for."
@@ -72,6 +84,12 @@ variable "extra_labels" {
   default     = ""
 }
 
+variable "drop_labels" {
+  type        = string
+  description = "Comma separated list of labels to be drop, in the format 'name1,name2,...,nameN' to be omitted to entries forwarded by lambda-promtail."
+  default     = ""
+}
+
 variable "omit_extra_labels_prefix" {
   type        = bool
   description = "Whether or not to omit the prefix `__extra_` from extra labels defined in the variable `extra_labels`."
@@ -118,4 +136,10 @@ variable "sqs_enabled" {
   type        = bool
   description = "Enables sending S3 logs to an SQS queue which will trigger lambda-promtail, unsuccessfully processed message are sent to a dead-letter-queue"
   default     = false
+}
+
+variable "sqs_queue_name_prefix" {
+  type        = string
+  description = "Name prefix for SQS queues"
+  default     = "s3-to-lambda-promtail"
 }
